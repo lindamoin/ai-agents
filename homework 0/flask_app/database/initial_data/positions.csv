@@ -1,3 +1,9 @@
 "position_id","inst_id","title","responsibilities","start_date","end_date"
-"1","1","Student","Teach classes;.","2023-01-01",NULL
+"1","1","Student","Teach classes;.","2025-01-01",NULL
+"2","1","Computer Science Student","Studying programming, data structures, and AI courses.","2023-09-01",NULL
+"3","1","AI Agents Project Developer","Built a multi-agent system with Flask, a database, and LLMs through OpenRouter for CSE 491.","2026-10-01",NULL
+"4","1","Peer Tutor","Helped classmates with C++ and calculus assignments.","2024-09-01",NULL
+"5","1","Student Club Member","Participated in club activities and team projects.","2024-09-01",NULL
+
+
 

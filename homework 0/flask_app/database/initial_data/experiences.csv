@@ -1,3 +1,7 @@
 "experience_id","position_id","name","description","hyperlink","start_date","end_date"
-"1","1","","Taught an introductory course on web application design.","https://www.youtube.com/@ghassemi",NULL,NULL
-
+"2","1","CSE 491: AI Agents","Building multi-agent systems with Flask, a database, and LLMs through OpenRouter.",NULL,NULL,NULL
+"3","1","C++ Programming","Arrays, pointers, and pass by value vs. by reference.",NULL,NULL,NULL
+"4","1","Calculus I (MACT 1121)","Limits and derivatives.",NULL,NULL,NULL
+"5","1","CS50x: Introduction to Computer Science","Harvard's introduction to programming and computer science.","https://cs50.harvard.edu/x/",NULL,NULL
+"6","1","Hugging Face AI Agents Course","Free course on building AI agents.","https://huggingface.co/learn/agents-course",NULL,NULL
+"7","1","Machine Learning Specialization","Andrew Ng's introduction to machine learning on Coursera.","https://www.coursera.org/specializations/machine-learning-introduction",NULL,NULL
