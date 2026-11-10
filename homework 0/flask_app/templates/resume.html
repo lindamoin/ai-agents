@@ -168,6 +168,15 @@
   socket.on('receive_message', function(data) {
     removeTypingIndicator();
     displayMessage('AI', data.response);
+
+    if (
+        data.response.includes('added to the') ||
+        data.response.includes('update') ||
+        data.response.includes('updated')
+    ) {
+        refreshResumeContent();
+    }
+});
   });
 
   // ----------------------------------------------------------------
@@ -239,6 +248,22 @@
       sendMessage();
     }
   }
+function refreshResumeContent() {
+    fetch('/resume')
+        .then(response => response.text())
+        .then(html => {
+            const parser = new DOMParser();
+            const newDocument = parser.parseFromString(html, 'text/html');
+
+            const newResume = newDocument.querySelector('.resume-content');
+            const currentResume = document.querySelector('.resume-content');
+
+            if (newResume && currentResume) {
+                currentResume.innerHTML = newResume.innerHTML;
+            }
+        })
+        .catch(error => console.error('Resume refresh error:', error));
+}
 </script>
 
 {% endblock %}
