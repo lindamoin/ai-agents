@@ -1,102 +1,190 @@
-"""
-llm.py — sends messages to an AI language model via the OpenRouter API.
 
-This file is the bridge between your Flask app and an AI model (GPT-3.5).
-When a student types a message in the chat, it travels here, gets sent to
-OpenRouter, and the AI's reply comes back.
-
-KEY CONCEPTS:
-  - API (Application Programming Interface): a way for two programs to talk
-    to each other over the internet. OpenRouter exposes an API we can call.
-  - HTTP POST request: sending data to a server (like submitting a form).
-    We POST the conversation to OpenRouter and it POSTs back the AI reply.
-  - System prompt: instructions given to the AI before the conversation starts.
-    Think of it as the AI's job description.
-"""
 
 import os
-import requests
+import re
+import ast
+from groq import Groq
+from jinja2 import Template
 
-# The URL we send our messages to.
-# OpenRouter acts as a single gateway to many different AI models.
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 
-# Which AI model to use. OpenRouter supports many models.
-# Models with ':free' suffix are free to use — no API credits needed.
-# See all available models at: https://openrouter.ai/models
-# QUESTION: What would change if you switched to a different model?
-#           Try 'google/gemma-2-9b-it:free' or 'mistralai/mistral-7b-instruct:free'.
-DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+MASTER_TEMPLATE = Template("""
+You are an AI expert with the following role:
+
+Role: {{ role }}
+Domain: {{ domain }}
+
+Specific instructions:
+{{ specific_instructions }}
+
+Background context:
+{{ background_context }}
+
+Examples:
+{{ few_shot_examples }}
+
+User request:
+{{ user_message }}
+""")
+
+
+def fill_template(role_data, user_message):
+    return MASTER_TEMPLATE.render(
+        role=role_data["role"],
+        domain=role_data["domain"],
+        specific_instructions=role_data["specific_instructions"],
+        background_context=role_data["background_context"] or "",
+        few_shot_examples=role_data["few_shot_examples"] or "",
+        user_message=user_message
+    )
 
 
 def send_message(user_message, system_prompt="You are a helpful assistant."):
-    """
-    Send a message to the AI and return its response as a string.
+    api_key = os.getenv("GROQ_API_KEY")
 
-    Args:
-        user_message  (str): The message the user typed in the chat.
-        system_prompt (str): Instructions that define how the AI should behave.
-                             This is sent before the user message, every time.
+    if not api_key:
+        return "GROQ_API_KEY is missing. Check your .env file."
 
-    Returns:
-        str: The AI's reply text, or an error message if something went wrong.
+    try:
+        client = Groq(api_key=api_key)
 
-    HOW IT WORKS:
-        We build a 'messages' list with two entries:
-          1. system — gives the AI its instructions (the resume context)
-          2. user   — the student's actual question
-        We send this list to OpenRouter, which forwards it to the AI model
-        and returns the generated reply.
+        response = client.chat.completions.create(
+            model=DEFAULT_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.7,
+            max_tokens=2048
+        )
 
-    # NOTE: This function has no memory — each call starts fresh.
-    #       Every message includes the full system prompt but no chat history.
-    # QUESTION: How would you modify this to remember previous messages?
-    #           Hint: you would need to store past messages and include them
-    #           in the 'messages' list between the system and user entries.
-    """
-    api_key = os.getenv('OPENROUTER_API_KEY')
+        return response.choices[0].message.content
 
-    # If the .env file is missing or the key was not filled in, tell the user
-    # immediately rather than making a doomed API call that will just hang.
-    if not api_key or api_key == 'paste-your-key-here':
-        return "⚠️ No API key found. Add your OpenRouter key to the .env file and restart the app."
+    except Exception as error:
+        print(f"Groq error: {error}")
+        return f"Could not reach the AI: {error}"
 
-    # The Authorization header tells OpenRouter who we are.
-    # "Bearer" is just a standard prefix for API key authentication.
-    # NEVER hardcode the api_key here — always load it from the .env file.
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:8080"   # identifies our app to OpenRouter
-    }
 
-    # The messages list defines the conversation context for the AI.
-    # 'system' sets the AI's role and knowledge before it sees our question.
-    # 'user' is the message the student actually typed.
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user",   "content": user_message}
-    ]
+def handle_ai_chat_request(db, role, message):
+    roles = db.getLLMRoles()
 
-    # Send the HTTP POST request to OpenRouter.
-    # timeout=30 means: give up if we don't hear back within 30 seconds.
-    response = requests.post(
-        OPENROUTER_URL,
-        headers=headers,
-        json={"model": DEFAULT_MODEL, "messages": messages},
-        timeout=30
-    )
+    if role not in roles:
+        return f"Unknown role: {role}"
 
-    result = response.json()
+    role_data = roles[role]
 
-    # OpenRouter sometimes returns HTTP 200 but with an 'error' field instead
-    # of 'choices' — this happens with a bad API key or an invalid request.
-    # QUESTION: Print result here and see what OpenRouter actually sends back.
-    if 'error' in result:
-        error_message = result['error'].get('message', 'Unknown API error')
-        return f"⚠️ OpenRouter error: {error_message}"
+    if role == "Content Expert":
+        role_data = dict(role_data)
+        role_data["background_context"] = (
+            (role_data["background_context"] or "")
+            + "\n\nResume content:\n"
+            + db.getResumeText()
+        )
 
-    if 'choices' not in result:
-        return f"⚠️ Unexpected response from OpenRouter: {result}"
+    prompt = fill_template(role_data, message)
 
-    return result['choices'][0]['message']['content']
+    if role == "Database Read Expert":
+        return execute_read_query(db, prompt)
+
+    if role == "Database Write Expert":
+        return execute_write_action(db, prompt)
+
+    if role == "Content Expert":
+        return send_message(prompt)
+
+    if role == "Orchestrator":
+        return run_orchestrator_plan(db, prompt)
+
+    return "Unsupported role."
+
+
+def execute_read_query(db, prompt):
+    sql = send_message(prompt)
+
+    if sql.startswith("Could not reach the AI"):
+        return sql
+
+    sql = re.sub(r"```(?:sql)?", "", sql, flags=re.IGNORECASE).strip()
+    sql = sql.replace("```", "").strip()
+
+    if not sql.upper().startswith("SELECT"):
+        return "The Database Read Expert did not generate a valid SELECT query."
+
+    try:
+        rows = db.query(sql)
+        return str(rows)
+    except Exception as error:
+        return f"Database query error: {error}"
+
+
+def execute_write_action(db, prompt):
+    generated_code = send_message(prompt)
+
+    if generated_code.startswith("Could not reach the AI"):
+        return generated_code
+
+    generated_code = re.sub(
+        r"```(?:python)?", "", generated_code, flags=re.IGNORECASE
+    ).replace("```", "").strip()
+
+    try:
+        local_vars = {}
+        exec(generated_code, {"db": db}, local_vars)
+        return local_vars.get("outcome", "The database update was completed.")
+    except Exception as error:
+        return f"Database update error: {error}"
+
+
+def run_orchestrator_plan(db, prompt):
+    plan_text = send_message(prompt)
+
+    if plan_text.startswith("Could not reach the AI"):
+        return plan_text
+
+    plan_text = re.sub(
+        r"```(?:python)?", "", plan_text, flags=re.IGNORECASE
+    ).replace("```", "").strip()
+
+    try:
+        plan = ast.literal_eval(plan_text)
+
+        if not isinstance(plan, list):
+            return "The Orchestrator did not return a valid list."
+
+        results = []
+
+        for call in plan:
+            match = re.fullmatch(
+                r'handle_ai_chat_request\(role="([^"]+)",\s*message="(.*?)"\s*\)',
+                call
+            )
+
+            if not match:
+                return "The Orchestrator generated an invalid expert call."
+
+            expert_role = match.group(1)
+            expert_message = match.group(2)
+
+            result = handle_ai_chat_request(
+                db,
+                role=expert_role,
+                message=expert_message
+            )
+
+            results.append(
+                f"Expert: {expert_role}\nResult: {result}"
+            )
+
+        synthesis_prompt = (
+            "Answer the user's original request using the expert results below. "
+            "Give a clear, natural response. If an expert reports an error, "
+            "explain it honestly.\n\n"
+            f"Original request: {prompt}\n\n"
+            + "\n\n".join(results)
+        )
+
+        return send_message(synthesis_prompt)
+
+    except Exception as error:
+        return f"Orchestrator error: {error}"
+
